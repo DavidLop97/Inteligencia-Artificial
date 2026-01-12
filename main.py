@@ -361,118 +361,124 @@ async def health_check():
 # 🔥 ENDPOINT PRINCIPAL: ANÁLISIS DE RUTA
 # ============================================
 @app.post("/analizar-ruta-riesgo/")
-async def analizar_ruta_riesgo(request: AnalisisRutaRequest):
-    """
-    Analiza una ruta específica y retorna las zonas de riesgo que la cruzan
-    
-    Args:
-        request: Contiene puntos_ruta (lista de coordenadas) y radio_deteccion
-    
-    Returns:
-        JSON con las zonas detectadas que impactan o están cerca de la ruta
-    """
+async def analizar_ruta_riesgo(request: dict):
     try:
-        print(f"🔍 Analizando ruta con {len(request.puntos_ruta)} puntos")
+        puntos_ruta = request.get("puntos_ruta", [])
+        radio_deteccion = request.get("radio_deteccion", 300)
         
-        csv_path = buscar_csv_defecto()
+        if not puntos_ruta:
+            raise HTTPException(status_code=400, detail="No se proporcionaron puntos de ruta")
         
-        if not csv_path:
-            raise HTTPException(
-                status_code=404,
-                detail="No se encontró archivo CSV. Por favor, carga un archivo primero."
-            )
+        # Cargar el CSV de accidentes más reciente
+        csv_dir = "data"
+        csv_files = [f for f in os.listdir(csv_dir) if f.startswith("accidentes_ecuador_") and f.endswith(".csv")]
         
-        df_csv = pd.read_csv(csv_path)
+        if not csv_files:
+            raise HTTPException(status_code=404, detail="No hay archivos CSV de accidentes")
         
-        if len(df_csv) == 0:
-            raise HTTPException(status_code=400, detail="El CSV no contiene datos")
+        csv_files.sort(reverse=True)
+        archivo_actual = csv_files[0]
+        ruta_csv = os.path.join(csv_dir, archivo_actual)
         
-        # Convertir puntos de ruta
-        puntos_ruta = [(p.lat, p.lng) for p in request.puntos_ruta]
+        # Leer accidentes
+        df = pd.read_csv(ruta_csv)
         
-        # 🔥 PASO 1: Filtrar accidentes cercanos a la ruta (1km buffer)
-        print("📊 Filtrando accidentes cerca de la ruta...")
-        accidentes_cercanos = []
-        for _, row in df_csv.iterrows():
-            if pd.notna(row['latitud']) and pd.notna(row['longitud']):
-                for punto in puntos_ruta:
-                    dist = haversine(punto[0], punto[1], row['latitud'], row['longitud'])
-                    if dist <= 1000:  # 1km de buffer
-                        accidentes_cercanos.append((row['latitud'], row['longitud']))
-                        break
+        # Agrupar por ubicación para crear zonas de riesgo
+        zonas_dict = {}
         
-        print(f"📊 Accidentes cerca de la ruta: {len(accidentes_cercanos)} de {len(df_csv)}")
+        for _, row in df.iterrows():
+            lat = round(row['latitud'], 4)
+            lng = round(row['longitud'], 4)
+            key = f"{lat},{lng}"
+            
+            if key not in zonas_dict:
+                zonas_dict[key] = {
+                    'latitud': lat,
+                    'longitud': lng,
+                    'cantidad_accidentes': 0,
+                    'nivel_peligro': 'MEDIO',
+                    'radio_metros': 200
+                }
+            
+            zonas_dict[key]['cantidad_accidentes'] += 1
         
-        if len(accidentes_cercanos) == 0:
-            print("✅ No hay accidentes cerca de esta ruta")
-            return {
-                "puntos_ruta_analizados": len(puntos_ruta),
-                "zonas_en_ruta": [],
-                "puntos_en_riesgo": 0,
-                "radio_deteccion_metros": request.radio_deteccion,
-                "archivo_csv_usado": csv_path.name
-            }
+        # Clasificar nivel de peligro
+        zonas_alto_riesgo = []
+        for zona in zonas_dict.values():
+            if zona['cantidad_accidentes'] >= 3:
+                zona['nivel_peligro'] = 'ALTO'
+                zona['radio_metros'] = 300
+            elif zona['cantidad_accidentes'] >= 2:
+                zona['nivel_peligro'] = 'MEDIO'
+                zona['radio_metros'] = 200
+            
+            if zona['cantidad_accidentes'] >= 2:  # Solo zonas con 2+ accidentes
+                zonas_alto_riesgo.append(zona)
         
-        # 🔥 PASO 2: Identificar zonas de riesgo
-        print("🗺️ Identificando zonas de riesgo...")
-        zonas_detectadas = identificar_zonas_peligrosas(
-            accidentes_cercanos, 
-            radio_metros=300,
-            min_accidentes=2
-        )
-        
-        print(f"🗺️ Zonas detectadas: {len(zonas_detectadas)}")
-        
-        # 🔥 PASO 3: Clasificar zonas según impacto en la ruta
+        # 🔥 ANÁLISIS DE RUTA CORREGIDO
         zonas_en_ruta = []
         puntos_en_riesgo = 0
         
-        for zona in zonas_detectadas:
+        for zona in zonas_alto_riesgo:
+            zona_impacta = False
             distancia_minima = float('inf')
-            impacta_ruta = False
             
-            # Verificar proximidad a cada punto de la ruta
+            # Contar cuántos puntos de la ruta están dentro del radio de la zona
             for punto in puntos_ruta:
-                distancia = haversine(
-                    punto[0], punto[1],
+                dist = haversine(
+                    punto['lat'], punto['lng'],
                     zona['latitud'], zona['longitud']
                 )
                 
-                if distancia < distancia_minima:
-                    distancia_minima = distancia
+                # Actualizar distancia mínima
+                if dist < distancia_minima:
+                    distancia_minima = dist
                 
-                # Si está dentro del radio de detección, impacta la ruta
-                if distancia <= request.radio_deteccion:
-                    impacta_ruta = True
-                    puntos_en_riesgo += 1
+                # 🔥 SI EL PUNTO ESTÁ DENTRO DEL RADIO DE LA ZONA
+                if dist <= zona['radio_metros']:
+                    zona_impacta = True
+                    puntos_en_riesgo += 1  # ✅ INCREMENTAR CONTADOR
             
-            # Agregar zona con información de impacto
-            zona_con_info = {
-                **zona,
-                'distancia_minima': round(distancia_minima, 2),
-                'impacta_ruta': impacta_ruta
-            }
-            zonas_en_ruta.append(zona_con_info)
-        
-        # Ordenar: primero las que impactan, luego por cantidad de accidentes
-        zonas_en_ruta.sort(key=lambda z: (not z['impacta_ruta'], -z['cantidad_accidentes']))
-        
-        print(f"✅ Zonas en ruta: {len(zonas_en_ruta)}")
-        print(f"🚨 Zonas que IMPACTAN: {len([z for z in zonas_en_ruta if z['impacta_ruta']])}")
+            # Agregar zona si está cerca de la ruta (dentro del radio de detección)
+            if distancia_minima <= radio_deteccion:
+                zonas_en_ruta.append({
+                    "latitud": zona['latitud'],
+                    "longitud": zona['longitud'],
+                    "radio_metros": zona['radio_metros'],
+                    "nivel_peligro": zona['nivel_peligro'],
+                    "cantidad_accidentes": zona['cantidad_accidentes'],
+                    "impacta_ruta": zona_impacta,  # ✅ TRUE si algún punto pasó por dentro
+                    "distancia_minima": round(distancia_minima, 2)
+                })
         
         return {
             "puntos_ruta_analizados": len(puntos_ruta),
             "zonas_en_ruta": zonas_en_ruta,
-            "puntos_en_riesgo": puntos_en_riesgo,
-            "radio_deteccion_metros": request.radio_deteccion,
-            "archivo_csv_usado": csv_path.name
+            "puntos_en_riesgo": puntos_en_riesgo,  # ✅ Ahora contará correctamente
+            "radio_deteccion_metros": radio_deteccion,
+            "archivo_csv_usado": archivo_actual
         }
         
     except Exception as e:
-        print(f"❌ Error en analizar-ruta-riesgo: {str(e)}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al analizar ruta: {str(e)}")
+
+
+def haversine(lat1, lon1, lat2, lon2):
+    """Calcula la distancia entre dos puntos en metros usando la fórmula de Haversine"""
+    from math import radians, sin, cos, sqrt, atan2
+    
+    R = 6371000  # Radio de la Tierra en metros
+    
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    
+    return R * c
+
 
 # ============================================
 # ENDPOINT: ZONAS DE ALTO RIESGO GENERAL
@@ -534,3 +540,54 @@ async def obtener_zonas_alto_riesgo(request: AccidenteRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    
+@app.get("/debug-zonas/")
+async def debug_zonas():
+    """Endpoint de debug para ver todas las zonas detectadas"""
+    try:
+        csv_dir = "data"
+        csv_files = [f for f in os.listdir(csv_dir) if f.startswith("accidentes_ecuador_") and f.endswith(".csv")]
+        
+        if not csv_files:
+            return {"error": "No hay archivos CSV"}
+        
+        csv_files.sort(reverse=True)
+        archivo_actual = csv_files[0]
+        ruta_csv = os.path.join(csv_dir, archivo_actual)
+        
+        df = pd.read_csv(ruta_csv)
+        
+        # Agrupar por ubicación
+        zonas_dict = {}
+        for _, row in df.iterrows():
+            lat = round(row['latitud'], 4)
+            lng = round(row['longitud'], 4)
+            key = f"{lat},{lng}"
+            
+            if key not in zonas_dict:
+                zonas_dict[key] = {
+                    'latitud': lat,
+                    'longitud': lng,
+                    'cantidad_accidentes': 0
+                }
+            
+            zonas_dict[key]['cantidad_accidentes'] += 1
+        
+        # Ordenar por cantidad
+        zonas_ordenadas = sorted(
+            zonas_dict.values(), 
+            key=lambda x: x['cantidad_accidentes'], 
+            reverse=True
+        )
+        
+        return {
+            "total_accidentes": len(df),
+            "total_zonas": len(zonas_ordenadas),
+            "top_10_zonas": zonas_ordenadas[:10],
+            "zonas_con_3_mas": [z for z in zonas_ordenadas if z['cantidad_accidentes'] >= 3],
+            "zonas_con_2": [z for z in zonas_ordenadas if z['cantidad_accidentes'] == 2],
+            "archivo": archivo_actual
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
