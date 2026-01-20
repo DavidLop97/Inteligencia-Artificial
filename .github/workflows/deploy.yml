@@ -1,0 +1,56 @@
+name: Deploy Backend FastAPI (IA) to GCP
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+
+jobs:
+  deploy:
+    name: Desplegar a Google Cloud Run
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v3
+      
+      - name: 🔧 Configurar Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      
+      - name: 🔐 Autenticar con Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      
+      - name: ☁️  Configurar Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      
+      - name: 🐳 Configurar Docker para GCR
+        run: |
+          gcloud auth configure-docker --quiet
+      
+      - name: 📦 Instalar dependencias de Go
+        working-directory: ./deployment/scripts
+        run: |
+          go mod download
+          go mod tidy
+      
+      - name: 🚀 Ejecutar script de despliegue
+        working-directory: ./deployment/scripts
+        run: |
+          go run deploy.go
+      
+      - name: ✅ Despliegue completado
+        run: |
+          echo "🎉 Backend FastAPI (IA) desplegado exitosamente"
+          echo "📊 Puedes ver los logs en Google Cloud Console"
