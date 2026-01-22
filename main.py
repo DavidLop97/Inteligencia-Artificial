@@ -23,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_BASE_URL = "https://backend-spring-527951342134.us-central1.run.app/api/accidentes/cercanos"
+API_BASE_URL = "http://localhost:8080/api/accidentes/cercanos"
 CSV_DIRECTORY = "data"
 
 Path(CSV_DIRECTORY).mkdir(exist_ok=True)
@@ -407,10 +407,10 @@ async def analizar_ruta_riesgo(request: dict):
         for zona in zonas_dict.values():
             if zona['cantidad_accidentes'] >= 3:
                 zona['nivel_peligro'] = 'ALTO'
-                zona['radio_metros'] = 300
+                zona['radio_metros'] = 500
             elif zona['cantidad_accidentes'] >= 2:
                 zona['nivel_peligro'] = 'MEDIO'
-                zona['radio_metros'] = 200
+                zona['radio_metros'] = 300
             
             if zona['cantidad_accidentes'] >= 2:  # Solo zonas con 2+ accidentes
                 zonas_alto_riesgo.append(zona)
@@ -591,3 +591,13 @@ async def debug_zonas():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+    # ============================================
+# STARTUP - PARA CLOUD RUN
+# ============================================
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    print(f"🚀 Iniciando servidor en puerto {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
