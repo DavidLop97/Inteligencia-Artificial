@@ -23,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_BASE_URL = "http://localhost:8080/api/accidentes/cercanos"
+API_BASE_URL = "https://backend-spring-527951342134.us-central1.run.app/api/accidentes/cercanos"
 CSV_DIRECTORY = "data"
 
 Path(CSV_DIRECTORY).mkdir(exist_ok=True)
