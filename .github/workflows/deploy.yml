@@ -7,10 +7,6 @@ on:
       - master
   workflow_dispatch:
 
-env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-
 jobs:
   deploy:
     name: Desplegar a Google Cloud Run

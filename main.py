@@ -410,21 +410,21 @@ async def analizar_ruta_riesgo(request: dict):
                 zona['radio_metros'] = 500
             elif zona['cantidad_accidentes'] >= 2:
                 zona['nivel_peligro'] = 'MEDIO'
-                zona['radio_metros'] = 300
+                zona['radio_metros'] = 400
             
             if zona['cantidad_accidentes'] >= 2:  # Solo zonas con 2+ accidentes
                 zonas_alto_riesgo.append(zona)
         
         # 🔥 ANÁLISIS DE RUTA CORREGIDO
         zonas_en_ruta = []
-        puntos_en_riesgo = 0
+        puntos_ruta_en_riesgo = set()  # 👈 USAR SET PARA EVITAR DUPLICADOS
         
         for zona in zonas_alto_riesgo:
             zona_impacta = False
             distancia_minima = float('inf')
             
             # Contar cuántos puntos de la ruta están dentro del radio de la zona
-            for punto in puntos_ruta:
+            for idx, punto in enumerate(puntos_ruta):
                 dist = haversine(
                     punto['lat'], punto['lng'],
                     zona['latitud'], zona['longitud']
@@ -437,7 +437,7 @@ async def analizar_ruta_riesgo(request: dict):
                 # 🔥 SI EL PUNTO ESTÁ DENTRO DEL RADIO DE LA ZONA
                 if dist <= zona['radio_metros']:
                     zona_impacta = True
-                    puntos_en_riesgo += 1  # ✅ INCREMENTAR CONTADOR
+                    puntos_ruta_en_riesgo.add(idx)  # 👈 AGREGAR ÍNDICE AL SET
             
             # Agregar zona si está cerca de la ruta (dentro del radio de detección)
             if distancia_minima <= radio_deteccion:
@@ -447,21 +447,32 @@ async def analizar_ruta_riesgo(request: dict):
                     "radio_metros": zona['radio_metros'],
                     "nivel_peligro": zona['nivel_peligro'],
                     "cantidad_accidentes": zona['cantidad_accidentes'],
-                    "impacta_ruta": zona_impacta,  # ✅ TRUE si algún punto pasó por dentro
+                    "impacta_ruta": zona_impacta,
                     "distancia_minima": round(distancia_minima, 2)
                 })
+        
+        # 👇 CONTAR PUNTOS ÚNICOS EN RIESGO
+        puntos_en_riesgo = len(puntos_ruta_en_riesgo)
+        
+        print(f"🔍 DEBUG:")
+        print(f"   - Total puntos ruta: {len(puntos_ruta)}")
+        print(f"   - Puntos en riesgo: {puntos_en_riesgo}")
+        print(f"   - Zonas en ruta: {len(zonas_en_ruta)}")
+        print(f"   - Zonas que impactan: {sum(1 for z in zonas_en_ruta if z['impacta_ruta'])}")
         
         return {
             "puntos_ruta_analizados": len(puntos_ruta),
             "zonas_en_ruta": zonas_en_ruta,
-            "puntos_en_riesgo": puntos_en_riesgo,  # ✅ Ahora contará correctamente
+            "puntos_en_riesgo": puntos_en_riesgo,
             "radio_deteccion_metros": radio_deteccion,
             "archivo_csv_usado": archivo_actual
         }
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al analizar ruta: {str(e)}")
-
+    
 
 def haversine(lat1, lon1, lat2, lon2):
     """Calcula la distancia entre dos puntos en metros usando la fórmula de Haversine"""
