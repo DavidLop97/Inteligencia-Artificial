@@ -23,13 +23,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_BASE_URL = "https://backend-spring-527951342134.us-central1.run.app/api/accidentes/cercanos"
+API_BASE_URL = "http://localhost:8080/api/accidentes/cercanos"
 CSV_DIRECTORY = "data"
 
 Path(CSV_DIRECTORY).mkdir(exist_ok=True)
 
 # ============================================
-# 🔧 FUNCIÓN HAVERSINE - DEBE ESTAR AQUÍ
+# 🔧 FUNCIÓN HAVERSINE - UNA SOLA VEZ
 # ============================================
 def haversine(lat1, lon1, lat2, lon2):
     """
@@ -364,7 +364,7 @@ async def health_check():
 async def analizar_ruta_riesgo(request: dict):
     try:
         puntos_ruta = request.get("puntos_ruta", [])
-        radio_deteccion = request.get("radio_deteccion", 300)
+        radio_deteccion = request.get("radio_deteccion", 1000)
         
         if not puntos_ruta:
             raise HTTPException(status_code=400, detail="No se proporcionaron puntos de ruta")
@@ -383,7 +383,9 @@ async def analizar_ruta_riesgo(request: dict):
         # Leer accidentes
         df = pd.read_csv(ruta_csv)
         
-        # Agrupar por ubicación para crear zonas de riesgo
+        print(f"📂 CSV cargado: {archivo_actual} con {len(df)} accidentes")
+        
+        # 🔥 PASO 1: Agrupar accidentes por ubicación (redondear a 4 decimales)
         zonas_dict = {}
         
         for _, row in df.iterrows():
@@ -402,44 +404,48 @@ async def analizar_ruta_riesgo(request: dict):
             
             zonas_dict[key]['cantidad_accidentes'] += 1
         
-        # Clasificar nivel de peligro
-        zonas_alto_riesgo = []
+        print(f"🔍 Zonas agrupadas: {len(zonas_dict)}")
+        
+        # 🔥 PASO 2: Clasificar nivel de peligro
+        zonas_todas = []
         for zona in zonas_dict.values():
             if zona['cantidad_accidentes'] >= 3:
                 zona['nivel_peligro'] = 'ALTO'
-                zona['radio_metros'] = 500
+                zona['radio_metros'] = 700
             elif zona['cantidad_accidentes'] >= 2:
                 zona['nivel_peligro'] = 'MEDIO'
                 zona['radio_metros'] = 400
             
-            if zona['cantidad_accidentes'] >= 2:  # Solo zonas con 2+ accidentes
-                zonas_alto_riesgo.append(zona)
+            # Solo guardar zonas con 2+ accidentes
+            if zona['cantidad_accidentes'] >= 2:
+                zonas_todas.append(zona)
         
-        # 🔥 ANÁLISIS DE RUTA CORREGIDO
+        print(f"⚠️ Zonas con 2+ accidentes: {len(zonas_todas)}")
+        
+        # 🔥 PASO 3: Filtrar solo las zonas cercanas a la RUTA ACTUAL
         zonas_en_ruta = []
-        puntos_ruta_en_riesgo = set()  # 👈 USAR SET PARA EVITAR DUPLICADOS
+        puntos_ruta_en_riesgo = set()
         
-        for zona in zonas_alto_riesgo:
-            zona_impacta = False
+        for zona in zonas_todas:
             distancia_minima = float('inf')
+            zona_impacta = False
             
-            # Contar cuántos puntos de la ruta están dentro del radio de la zona
+            # Verificar distancia a cada punto de la ruta
             for idx, punto in enumerate(puntos_ruta):
                 dist = haversine(
                     punto['lat'], punto['lng'],
                     zona['latitud'], zona['longitud']
                 )
                 
-                # Actualizar distancia mínima
                 if dist < distancia_minima:
                     distancia_minima = dist
                 
-                # 🔥 SI EL PUNTO ESTÁ DENTRO DEL RADIO DE LA ZONA
+                # Si está dentro del radio de la zona
                 if dist <= zona['radio_metros']:
                     zona_impacta = True
-                    puntos_ruta_en_riesgo.add(idx)  # 👈 AGREGAR ÍNDICE AL SET
+                    puntos_ruta_en_riesgo.add(idx)
             
-            # Agregar zona si está cerca de la ruta (dentro del radio de detección)
+            # Solo agregar si está dentro del radio de detección
             if distancia_minima <= radio_deteccion:
                 zonas_en_ruta.append({
                     "latitud": zona['latitud'],
@@ -451,13 +457,13 @@ async def analizar_ruta_riesgo(request: dict):
                     "distancia_minima": round(distancia_minima, 2)
                 })
         
-        # 👇 CONTAR PUNTOS ÚNICOS EN RIESGO
         puntos_en_riesgo = len(puntos_ruta_en_riesgo)
         
-        print(f"🔍 DEBUG:")
-        print(f"   - Total puntos ruta: {len(puntos_ruta)}")
+        print(f"✅ RESULTADO:")
+        print(f"   - Puntos ruta: {len(puntos_ruta)}")
+        print(f"   - Zonas detectadas: {len(zonas_en_ruta)}")
         print(f"   - Puntos en riesgo: {puntos_en_riesgo}")
-        print(f"   - Zonas en ruta: {len(zonas_en_ruta)}")
+        print(f"   - Zonas ALTO: {sum(1 for z in zonas_en_ruta if z['nivel_peligro'] == 'ALTO')}")
         print(f"   - Zonas que impactan: {sum(1 for z in zonas_en_ruta if z['impacta_ruta'])}")
         
         return {
@@ -472,24 +478,6 @@ async def analizar_ruta_riesgo(request: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al analizar ruta: {str(e)}")
-    
-
-def haversine(lat1, lon1, lat2, lon2):
-    """Calcula la distancia entre dos puntos en metros usando la fórmula de Haversine"""
-    from math import radians, sin, cos, sqrt, atan2
-    
-    R = 6371000  # Radio de la Tierra en metros
-    
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * atan2(sqrt(a), sqrt(1-a))
-    
-    return R * c
-
 
 # ============================================
 # ENDPOINT: ZONAS DE ALTO RIESGO GENERAL
@@ -551,7 +539,7 @@ async def obtener_zonas_alto_riesgo(request: AccidenteRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-    
+
 @app.get("/debug-zonas/")
 async def debug_zonas():
     """Endpoint de debug para ver todas las zonas detectadas"""
@@ -602,9 +590,8 @@ async def debug_zonas():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
 
-    # ============================================
+# ============================================
 # STARTUP - PARA CLOUD RUN
 # ============================================
 if __name__ == "__main__":
